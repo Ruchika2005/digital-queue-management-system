@@ -33,7 +33,6 @@ def admin_login():
         if admin:
             session['admin_id'] = admin['admin_id']
             session['admin_username'] = admin['username']
-            flash('Admin logged in successfully!', 'success')
             return redirect(url_for('admin_dashboard'))
         else:
             flash('Invalid admin credentials', 'danger')
@@ -66,7 +65,6 @@ def admin_dashboard():
 def admin_logout():
     session.pop('admin_id', None)
     session.pop('admin_username', None)
-    flash('Admin logged out.', 'info')
     return redirect(url_for('admin_login'))
 
 @app.route('/dashboard')
@@ -117,7 +115,7 @@ def login():
 @app.route('/logout')
 def logout():
     session.clear()
-    return redirect(url_for('home'))
+    return redirect(url_for('login'))
 
 @app.route('/my_tokens')
 def view_my_tokens():
@@ -188,8 +186,6 @@ def take_token():
             (user_id, new_token_number)
         )
         conn.commit()
-
-        flash(f'Your token number is {new_token_number}', 'success')
         conn.close()
         return redirect(url_for('view_my_tokens'))
 
@@ -232,7 +228,6 @@ def call_token(token_id):
         announcement_queue.put({'token': x, 'counter': 1})
     cursor.close()
     conn.close()
-    flash("Token called.")
     return redirect(url_for('admin_dashboard'))
 
 @app.route('/skip/<int:token_id>')
@@ -243,7 +238,6 @@ def skip_token(token_id):
     conn.commit()
     cursor.close()
     conn.close()
-    flash("Token skipped.")
     return redirect(url_for('admin_dashboard'))
 
 @app.route('/done/<int:token_id>')
@@ -254,7 +248,6 @@ def mark_done(token_id):
     conn.commit()
     cursor.close()
     conn.close()
-    flash("Token marked as done.")
     return redirect(url_for('admin_dashboard'))
 
 """
