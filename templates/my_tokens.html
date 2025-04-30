@@ -46,18 +46,7 @@
             font-weight: 500;
             font-size: 1.8em;
         }
-        .back-link {
-            display: inline-block;
-            margin-top: 20px;
-            font-size: 14px;
-            color: #6f42c1;
-            text-decoration: none;
-        }
 
-
-        .back-link:hover {
-            text-decoration: underline;
-        }
         .token-list {
             list-style: none;
             padding: 0;
@@ -66,9 +55,26 @@
         .token-list li {
             background-color: #f0ebfa;
             margin: 10px 0;
-            padding: 12px;
+            padding: 15px;
             border-radius: 8px;
             font-size: 16px;
+        }
+
+        .token-details {
+            display: flex;
+            justify-content: space-between;
+            font-size: 14px;
+            margin-top: 6px;
+            color: #333;
+        }
+
+        .token-label {
+            font-weight: 500;
+            color: #6f42c1;
+        }
+
+        .btn-cancel {
+            margin-top: 10px;
         }
 
     </style>
@@ -86,11 +92,13 @@
             <ul class="token-list text-center">
                 {% for token in tokens %}
                     <li>
-                        <strong>Token {{ token.token_number }}</strong><br>
-                        <strong>Status:</strong> {{ token.status }}<br>
-            
-                        {% if token.status == 'called' or token.status == 'waiting' %}
-                            <form method="post" action="{{ url_for('cancel_token', token_id=token.id) }}" style="margin-top: 10px;">
+                        <div><strong>Token {{ token['token_number'] }}</strong></div>
+                        <div class="token-details">
+                            <span><span class="token-label">Status:</span> {{ token['status'] }}</span>
+                            <span><span class="token-label">Date:</span> {{ token['issued_at'] }}</span>
+                        </div>
+                        {% if token['status'] == 'called' or token['status'] == 'waiting' %}
+                            <form method="post" action="{{ url_for('cancel_token', token_id=token['token_id']) }}" class="btn-cancel">
                                 <button type="submit" class="btn btn-danger btn-sm">Cancel</button>
                             </form>
                         {% endif %}
@@ -99,10 +107,9 @@
             </ul>
             
             {% else %}
-                <p>No tokens yet.</p>
+                <p class="text-center">No tokens yet.</p>
             {% endif %}
         </div>
-        
     </div>
 
     <!-- Bootstrap JS -->

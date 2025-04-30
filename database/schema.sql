@@ -39,3 +39,10 @@ CREATE TABLE notifications (
     FOREIGN KEY (user_id) REFERENCES users(user_id),
     FOREIGN KEY (token_id) REFERENCES tokens(token_id)
 );
+
+CREATE TABLE group_messages (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  username VARCHAR(100),
+  message TEXT,
+  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+);
