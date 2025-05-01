@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash
-from database.db_connection import get_db_connection  # Corrected import
+from database.db_connection import get_db_connection  
 import threading
 from queue import Queue
 import pyttsx3
@@ -13,50 +13,11 @@ import base64
 
 
 app = Flask(__name__)
-app.secret_key = 'your_secret_key'  # Change this to something strong in production!
+app.secret_key = 'secret_key'  
 
 @app.route('/')
 def home():
-    return render_template('home.html')  # instead of redirect
-
-
-
-
-
-@app.route('/cancel_token/<int:token_id>', methods=['POST'])
-def cancel_token(token_id):
-    # Connect to MySQL database
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-
-    # Fetch the token details from the database
-    cursor.execute('SELECT * FROM tokens WHERE token_id = %s', (token_id,))
-    token = cursor.fetchone()
-
-    if not token:
-        flash("Token not found", "danger")
-        return redirect(url_for('view_my_tokens'))
-
-    # Check if the token belongs to the current user (assuming user_id is in session)
-    current_user_id = session.get('user_id')  # Adjust based on how you store user_id
-    if token['user_id'] != current_user_id:  # Ensure the token is owned by the current user
-        flash("Unauthorized action", "danger")
-        return redirect(url_for('view_my_tokens'))
-
-    # Check if the token status is 'waiting' or 'called'
-    if token['status'] in ['waiting', 'called']:  # Status should be 'waiting' or 'called'
-        # Update the token status to 'Cancelled'
-        cursor.execute('UPDATE tokens SET status = %s WHERE token_id = %s', ('missed', token_id))  # Use 'missed' to mark cancellation
-        conn.commit()
-        flash("Token cancelled successfully", "success")
-    else:
-        flash("Cannot cancel this token", "warning")
-
-    # Close the connection and cursor
-    cursor.close()
-    conn.close()
-
-    return redirect(url_for('view_my_tokens'))
+    return render_template('home.html')  
 
 # Admin login
 @app.route('/admin/login', methods=['GET', 'POST'])
@@ -113,6 +74,131 @@ def admin_logout():
     session.pop('admin_username', None)
     return redirect(url_for('admin_login'))
 
+@app.route('/admin/analytics')
+def analytics():
+    if 'admin_id' not in session:
+        flash('Admin login required!', 'warning')
+        return redirect(url_for('admin_login'))
+
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    try:
+        # 1. Tokens served per hour
+        cursor.execute("""
+            SELECT HOUR(called_at) AS hour, COUNT(*) AS count
+            FROM tokens
+            WHERE status = 'done' AND called_at IS NOT NULL
+            GROUP BY hour
+            ORDER BY hour
+        """)
+        hour_data = cursor.fetchall()
+        labels = []
+        token_counts = []
+        for row in hour_data:
+            if row['hour'] is not None:
+                labels.append(f"{int(row['hour']):02d}:00")
+                token_counts.append(row['count'])
+
+        # 2. Average wait time per hour (in minutes)
+        cursor.execute("""
+            SELECT HOUR(called_at) AS hour,
+                   AVG(TIME_TO_SEC(TIMEDIFF(called_at, issued_at))/60) AS avg_wait
+            FROM tokens
+            WHERE status = 'done' AND called_at IS NOT NULL AND issued_at IS NOT NULL
+            GROUP BY hour
+            ORDER BY hour
+        """)
+        wait_data = cursor.fetchall()
+        wait_labels = []
+        wait_times = []
+        for row in wait_data:
+            if row['hour'] is not None:
+                wait_labels.append(f"{int(row['hour']):02d}:00")
+                wait_times.append(round(row['avg_wait'] or 0, 2))
+
+        # 3. Token status summary
+        cursor.execute("SELECT status, COUNT(*) AS count FROM tokens GROUP BY status")
+        status_data = cursor.fetchall()
+        status_labels = []
+        status_counts = []
+        for row in status_data:
+            status_labels.append(row['status'])
+            status_counts.append(row['count'])
+
+    except Exception as e:
+        cursor.close()
+        conn.close()
+        return f"Error fetching analytics: {e}"
+
+    cursor.close()
+    conn.close()
+
+    return render_template("analytics.html",
+        labels=labels,
+        token_counts=token_counts,
+        wait_labels=wait_labels,
+        wait_times=wait_times,
+        status_labels=status_labels,
+        status_counts=status_counts
+    )
+
+# --- Announcement Queue ---
+announcement_queue = Queue()
+
+def announcement_worker():
+    engine = pyttsx3.init()
+    engine.setProperty('rate', 150)
+    while True:
+        task = announcement_queue.get()
+        try:
+            token = task['token']
+            counter = task['counter']
+            engine.say(f"Token number {token}, please proceed to counter {counter}")
+            engine.runAndWait()
+        except Exception as e:
+            print(f"Announcement Error: {e}")
+        announcement_queue.task_done()
+
+# Start the worker in a background thread
+threading.Thread(target=announcement_worker, daemon=True).start()
+
+
+
+
+# Simulating a database of snapshots
+snapshots = []
+
+# Simulated data for tokens (This can be fetched dynamically in a real app)
+tokens = [
+    {'token_number': 1, 'username': 'user1', 'status': 'completed'},
+    {'token_number': 2, 'username': 'user2', 'status': 'pending'},
+    {'token_number': 3, 'username': 'user3', 'status': 'completed'},
+]
+
+@app.route('/admin/snapshot')
+def snapshot():
+    # Show list of snapshots
+    return render_template('snapshot.html', snapshots=snapshots)
+
+@app.route('/admin/snapshot/create')
+def create_snapshot():
+    # Create a snapshot by saving the current system state
+    snapshot_id = len(snapshots) + 1  # Unique ID for the snapshot
+    total_tokens = len(tokens)
+    completed_tokens = sum(1 for token in tokens if token['status'] == 'completed')
+    snapshot_data = {
+        'id': snapshot_id,
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'total_tokens': total_tokens,
+        'completed_tokens': completed_tokens
+    }
+    snapshots.append(snapshot_data)
+
+    # Redirect to the snapshot page after creating a snapshot
+    return redirect(url_for('snapshot'))
+
+
 @app.route('/dashboard')
 def dashboard():
     if 'user_id' not in session:
@@ -122,7 +208,7 @@ def dashboard():
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
-    # Fetch live queue
+    
     cursor.execute(
         "SELECT t.token_number, t.status, u.username FROM tokens t JOIN users u ON t.user_id = u.user_id WHERE t.status IN ('waiting', 'called') ORDER BY t.token_number ASC"
     )
@@ -131,6 +217,88 @@ def dashboard():
     conn.close()
 
     return render_template('dashboard.html', username=session['username'], queue=queue)
+
+
+@app.route('/cancel_token/<int:token_id>', methods=['POST'])
+def cancel_token(token_id):
+    # Connect to MySQL database
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    # Fetch the token details from the database
+    cursor.execute('SELECT * FROM tokens WHERE token_id = %s', (token_id,))
+    token = cursor.fetchone()
+
+    if not token:
+        flash("Token not found", "danger")
+        return redirect(url_for('view_my_tokens'))
+
+    # Check if the token belongs to the current user (assuming user_id is in session)
+    current_user_id = session.get('user_id')  # Adjust based on how you store user_id
+    if token['user_id'] != current_user_id:  # Ensure the token is owned by the current user
+        flash("Unauthorized action", "danger")
+        return redirect(url_for('view_my_tokens'))
+
+    # Check if the token status is 'waiting' or 'called'
+    if token['status'] in ['waiting', 'called']:  # Status should be 'waiting' or 'called'
+        # Update the token status to 'Cancelled'
+        cursor.execute('UPDATE tokens SET status = %s WHERE token_id = %s', ('missed', token_id))  # Use 'missed' to mark cancellation
+        conn.commit()
+        flash("Token cancelled successfully", "success")
+    else:
+        flash("Cannot cancel this token", "warning")
+
+    # Close the connection and cursor
+    cursor.close()
+    conn.close()
+
+    return redirect(url_for('view_my_tokens'))
+
+@app.route('/call/<int:token_id>')
+def call_token(token_id):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    # Get current token info
+    cursor.execute("SELECT token_number FROM tokens WHERE token_id = %s", (token_id,))
+    token = cursor.fetchone()
+    
+    if token:
+        x = token['token_number']
+        target_token_number = x + 3
+        
+        # Find user with token_number = x+3 and status = 'waiting'
+        cursor.execute(
+            "SELECT t.token_number, u.phone FROM tokens t JOIN users u ON t.user_id = u.user_id WHERE t.token_number = %s AND t.status = 'waiting'",
+            (target_token_number,)
+        )
+        target = cursor.fetchone()
+        
+        if target:
+            phone_number = target['phone']  # Ensure it's in international format like '+91XXXXXXXXXX'
+            message = f"Reminder: Your token number {target_token_number} is approaching. Current called number is {x}."
+            
+            from notification import send_whatsapp_reminder
+            send_whatsapp_reminder(phone_number, message)
+    
+        # Update current token as called
+        cursor.execute("UPDATE tokens SET status='called', called_at=NOW() WHERE token_id=%s", (token_id,))
+        conn.commit()
+        # ✅ Add announcement task
+        announcement_queue.put({'token': x, 'counter': 1})
+    cursor.close()
+    conn.close()
+    return redirect(url_for('admin_dashboard'))
+
+@app.route('/done/<int:token_id>')
+def mark_done(token_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE tokens SET status='done' WHERE token_id=%s", (token_id,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return redirect(url_for('admin_dashboard'))
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -213,6 +381,15 @@ def register():
 
     return render_template('register.html')
 
+@app.route('/skip/<int:token_id>')
+def skip_token(token_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE tokens SET status='missed' WHERE token_id=%s", (token_id,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return redirect(url_for('admin_dashboard'))
 
 @app.route('/take_token', methods=['GET', 'POST'])
 def take_token():
@@ -243,183 +420,6 @@ def take_token():
     conn.close()
     return render_template('take_token.html')
 
-
-
-@app.route('/call/<int:token_id>')
-def call_token(token_id):
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    
-    # Get current token info
-    cursor.execute("SELECT token_number FROM tokens WHERE token_id = %s", (token_id,))
-    token = cursor.fetchone()
-    
-    if token:
-        x = token['token_number']
-        target_token_number = x + 3
-        
-        # Find user with token_number = x+3 and status = 'waiting'
-        cursor.execute(
-            "SELECT t.token_number, u.phone FROM tokens t JOIN users u ON t.user_id = u.user_id WHERE t.token_number = %s AND t.status = 'waiting'",
-            (target_token_number,)
-        )
-        target = cursor.fetchone()
-        
-        if target:
-            phone_number = target['phone']  # Ensure it's in international format like '+91XXXXXXXXXX'
-            message = f"Reminder: Your token number {target_token_number} is approaching. Current called number is {x}."
-            
-            from notification import send_whatsapp_reminder
-            send_whatsapp_reminder(phone_number, message)
-    
-        # Update current token as called
-        cursor.execute("UPDATE tokens SET status='called', called_at=NOW() WHERE token_id=%s", (token_id,))
-        conn.commit()
-        # ✅ Add announcement task
-        announcement_queue.put({'token': x, 'counter': 1})
-    cursor.close()
-    conn.close()
-    return redirect(url_for('admin_dashboard'))
-
-@app.route('/skip/<int:token_id>')
-def skip_token(token_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE tokens SET status='missed' WHERE token_id=%s", (token_id,))
-    conn.commit()
-    cursor.close()
-    conn.close()
-    return redirect(url_for('admin_dashboard'))
-
-@app.route('/done/<int:token_id>')
-def mark_done(token_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE tokens SET status='done' WHERE token_id=%s", (token_id,))
-    conn.commit()
-    cursor.close()
-    conn.close()
-    return redirect(url_for('admin_dashboard'))
-
-@app.route('/admin/analytics')
-def analytics():
-    if 'admin_id' not in session:
-        flash('Admin login required!', 'warning')
-        return redirect(url_for('admin_login'))
-
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-
-    # 1. Tokens served per hour
-    cursor.execute("""
-        SELECT HOUR(called_at) as hour, COUNT(*) as count 
-        FROM tokens 
-        WHERE status='done' AND called_at IS NOT NULL 
-        GROUP BY hour ORDER BY hour
-    """)
-    hour_data = cursor.fetchall()
-    labels = [f"{row['hour']}:00" for row in hour_data]
-    token_counts = [row['count'] for row in hour_data]
-
-    # 2. Average wait time per hour
-    cursor.execute("""
-        SELECT TIME_TO_SEC(TIMEDIFF(called_at, issued_at))/60 AS wait_minutes, HOUR(called_at) as hour 
-        FROM tokens 
-        WHERE status='done' AND called_at IS NOT NULL
-    """)
-    waits = cursor.fetchall()
-
-    # Debugging: Print the raw waits data
-    print("Waits:", waits)
-
-    # Organize waits by hour
-    hour_waits = {}
-    for row in waits:
-        hour = row['hour']
-        hour_waits.setdefault(hour, []).append(row['wait_minutes'])
-
-    # Prepare labels and average wait times
-    wait_labels = [f"{h}:00" for h in sorted(hour_waits)]
-    avg_waits = [round(sum(v)/len(v), 2) for h, v in sorted(hour_waits.items())]
-
-    # Debugging output (optional)
-    print("Wait Labels:", wait_labels)
-    print("Avg Wait Times:", avg_waits)
-
-    # 3. Token status summary
-    cursor.execute("SELECT status, COUNT(*) as count FROM tokens GROUP BY status")
-    status_data = cursor.fetchall()
-    status_map = {'waiting': 0, 'called': 0, 'done': 0, 'missed': 0}
-    for row in status_data:
-        status_map[row['status']] = row['count']
-
-    cursor.close()
-    conn.close()
-
-    return render_template("analytics.html",
-        labels=labels,  # For chart 1 and 2 (tokens per hour and wait times)
-        token_counts=token_counts,  # For chart 1
-        wait_labels=wait_labels,    # For chart 2
-        wait_times=avg_waits,       # For chart 2
-        status_labels=list(status_map.keys()),  # For chart 3
-        status_counts=list(status_map.values())  # For chart 3
-    )
-
-
-# --- Announcement Queue ---
-announcement_queue = Queue()
-
-def announcement_worker():
-    engine = pyttsx3.init()
-    engine.setProperty('rate', 150)
-    while True:
-        task = announcement_queue.get()
-        try:
-            token = task['token']
-            counter = task['counter']
-            engine.say(f"Token number {token}, please proceed to counter {counter}")
-            engine.runAndWait()
-        except Exception as e:
-            print(f"Announcement Error: {e}")
-        announcement_queue.task_done()
-
-# Start the worker in a background thread
-threading.Thread(target=announcement_worker, daemon=True).start()
-
-
-
-
-# Simulating a database of snapshots
-snapshots = []
-
-# Simulated data for tokens (This can be fetched dynamically in a real app)
-tokens = [
-    {'token_number': 1, 'username': 'user1', 'status': 'completed'},
-    {'token_number': 2, 'username': 'user2', 'status': 'pending'},
-    {'token_number': 3, 'username': 'user3', 'status': 'completed'},
-]
-
-@app.route('/admin/snapshot')
-def snapshot():
-    # Show list of snapshots
-    return render_template('snapshot.html', snapshots=snapshots)
-
-@app.route('/admin/snapshot/create')
-def create_snapshot():
-    # Create a snapshot by saving the current system state
-    snapshot_id = len(snapshots) + 1  # Unique ID for the snapshot
-    total_tokens = len(tokens)
-    completed_tokens = sum(1 for token in tokens if token['status'] == 'completed')
-    snapshot_data = {
-        'id': snapshot_id,
-        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'total_tokens': total_tokens,
-        'completed_tokens': completed_tokens
-    }
-    snapshots.append(snapshot_data)
-
-    # Redirect to the snapshot page after creating a snapshot
-    return redirect(url_for('snapshot'))
 
 
 if __name__ == '__main__':
